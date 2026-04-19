@@ -1,850 +1,921 @@
-const STORAGE_KEY = 'opsguard-state-v1';
-const BACKEND_URL = 'https://YOUR-APP.up.railway.app'; // ganti dengan URL Railway kamu
+const GEMINI_API_KEY = "AIzaSyCBwBkFIX1fPOLQ8aFMY0YjZrzZU7C_vV4";
+const GEMINI_MODEL   = "gemini-2.0-flash";
+const GEMINI_URL     = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${GEMINI_API_KEY}`;
 
-const navbar = document.getElementById('navbar');
-const hamburger = document.getElementById('hamburger');
-const navLinks = document.getElementById('navLinks');
+// ──────────────────────────────────────────────
+// STORAGE HELPERS
+// ──────────────────────────────────────────────
+function getRecords() {
+  try { return JSON.parse(localStorage.getItem("opsguard_records") || "[]"); }
+  catch { return []; }
+}
+function saveRecords(arr) {
+  localStorage.setItem("opsguard_records", JSON.stringify(arr));
+}
+function getAudit() {
+  try { return JSON.parse(localStorage.getItem("opsguard_audit") || "[]"); }
+  catch { return []; }
+}
+function saveAudit(arr) {
+  localStorage.setItem("opsguard_audit", JSON.stringify(arr));
+}
+function addAudit(entry) {
+  const audit = getAudit();
+  audit.unshift(entry);
+  saveAudit(audit.slice(0, 200));
+}
+function tsNow() {
+  return new Date().toLocaleString("id-ID", { dateStyle: "short", timeStyle: "short" });
+}
 
-window.addEventListener('scroll', () => {
-  if (navbar) navbar.classList.toggle('scrolled', window.scrollY > 20);
-});
+// ──────────────────────────────────────────────
+// SEED DEMO DATA (hanya jika storage kosong)
+// ──────────────────────────────────────────────
+function seedDemoData() {
+  if (getRecords().length > 0) return;
 
-if (hamburger && navLinks) {
-  hamburger.addEventListener('click', () => {
-    navLinks.classList.toggle('open');
+  const demo = [
+    { id: "REC-001", assetId: "TRK-PLT-204", location: "Warehouse Bekasi 2",       type: "Preventive Maintenance", date: "2025-07-10", technician: "Budi Santoso",   status: "Valid",             note: "Penggantian oli rutin. Aset dalam kondisi baik.", aiRisk: "low",    ts: "10/07/25 09.00" },
+    { id: "REC-002", assetId: "FRK-LFT-012", location: "Gudang Cakung A",           type: "Corrective Maintenance", date: "2025-07-11", technician: "Rini Wulandari", status: "Warning",           note: "Fork lift tidak bisa naik penuh. Kemungkinan seal bocor.", aiRisk: "high",   ts: "11/07/25 10.15" },
+    { id: "REC-003", assetId: "CRN-OVH-007", location: "Workshop Pulogadung",       type: "Inspection",             date: "2025-07-12", technician: "Ahmad Fauzi",    status: "Menunggu Review",   note: "Inspeksi rutin overhead crane. Wire rope perlu penggantian segera.", aiRisk: "high",   ts: "12/07/25 08.30" },
+    { id: "REC-004", assetId: "GEN-SET-003", location: "Server Room Lantai 2",      type: "Preventive Maintenance", date: "2025-07-13", technician: "Dewi Cahyani",   status: "Approved",          note: "Service genset bulanan. Bahan bakar dan filter OK.", aiRisk: "low",    ts: "13/07/25 14.00" },
+    { id: "REC-005", assetId: "HVY-DMP-018", location: "Terminal Pelabuhan Barat",  type: "Emergency Repair",       date: "2025-07-14", technician: "Teguh Prasetyo", status: "Warning",           note: "Hydraulic dump truck bocor. Unit dihentikan sementara.", aiRisk: "high",   ts: "14/07/25 07.45" },
+    { id: "REC-006", assetId: "AIR-CMP-009", location: "Area Produksi Lantai 1",   type: "Corrective Maintenance", date: "2025-07-14", technician: "Sari Rahayu",    status: "Valid",             note: "Penggantian belt kompresor udara. Sudah running normal.", aiRisk: "medium", ts: "14/07/25 11.20" },
+    { id: "REC-007", assetId: "TRK-PLT-207", location: "Warehouse Bekasi 2",       type: "Inspection",             date: "2025-07-15", technician: "Budi Santoso",   status: "Menunggu Review",   note: "Masalah serupa dengan TRK-PLT-204 seminggu lalu. Perlu cek lebih lanjut.", aiRisk: "medium", ts: "15/07/25 09.10" },
+    { id: "REC-008", assetId: "ELC-PNL-002", location: "Gardu Induk Cikarang",     type: "Preventive Maintenance", date: "2025-07-15", technician: "Hendra Kurniawan", status: "Revised",          note: "Revisi catatan: tegangan drop terjadi 2x, bukan 1x seperti laporan awal.", aiRisk: "medium", ts: "15/07/25 13.55" },
+  ];
+
+  saveRecords(demo);
+
+  const auditSeed = [
+    { ts: "15/07/25 14.30", assetId: "ELC-PNL-002", action: "Revised",          user: "Hendra Kurniawan", status: "Revised",          reason: "Koreksi jumlah voltage drop dari 1x menjadi 2x" },
+    { ts: "15/07/25 09.10", assetId: "TRK-PLT-207", action: "Submitted",         user: "Budi Santoso",     status: "Menunggu Review",   reason: "Pola serupa dengan TRK-PLT-204 terdeteksi" },
+    { ts: "13/07/25 16.20", assetId: "GEN-SET-003", action: "Approved",          user: "Supervisor Adi",   status: "Approved",          reason: "Data lengkap dan valid. Tidak ada anomali." },
+    { ts: "12/07/25 08.30", assetId: "CRN-OVH-007", action: "Flagged for Review",user: "AI Validator",     status: "Menunggu Review",   reason: "Wire rope dalam kondisi kritis. Perlu tindak lanjut segera." },
+    { ts: "11/07/25 10.15", assetId: "FRK-LFT-012", action: "Warning Issued",    user: "AI Validator",     status: "Warning",           reason: "Hydraulic seal suspect. Risiko tinggi operasional." },
+  ];
+  saveAudit(auditSeed);
+}
+
+// ──────────────────────────────────────────────
+// NAVBAR HAMBURGER
+// ──────────────────────────────────────────────
+function initNavbar() {
+  const hamburger = document.getElementById("hamburger");
+  const navLinks  = document.getElementById("navLinks");
+  if (!hamburger || !navLinks) return;
+
+  hamburger.addEventListener("click", () => {
+    navLinks.classList.toggle("open");
+    hamburger.classList.toggle("active");
   });
 
-  navLinks.querySelectorAll('a').forEach(link => {
-    link.addEventListener('click', () => navLinks.classList.remove('open'));
-  });
-}
-
-const defaultState = {
-  metrics: {
-    tickets: 1284,
-    validation: 94,
-    review: 27,
-    risk: 8,
-    validatedMini: 148,
-    needReviewMini: 12,
-  },
-  records: [],
-  reviewQueue: [
-    {
-      id: 'review-1',
-      asset: 'Forklift FL-12',
-      note: 'Lokasi saat ini tidak sesuai dengan data approved terakhir',
-      level: 'Tinggi',
-      className: 'critical',
-      location: 'Depot Barat',
-      maintenanceType: 'Inspection'
-    },
-    {
-      id: 'review-2',
-      asset: 'Conveyor CV-08',
-      note: 'Ada kemungkinan tiket duplikat dikirim dalam 2 jam yang sama',
-      level: 'Sedang',
-      className: 'medium',
-      location: 'Line 2',
-      maintenanceType: 'Preventive Maintenance'
-    },
-    {
-      id: 'review-3',
-      asset: 'Truck TR-77',
-      note: 'Catatan maintenance terlalu singkat dan kurang detail penting',
-      level: 'Rendah',
-      className: 'low',
-      location: 'Pool A',
-      maintenanceType: 'Corrective Maintenance'
-    }
-  ],
-  auditData: [
-    {
-      time: '14 Apr 2026 · 08:14',
-      asset: 'TRK-PLT-204',
-      action: 'Pengajuan Baru',
-      user: 'Admin Gudang',
-      status: 'Valid',
-      note: 'Tiket preventive maintenance berhasil dibuat'
-    },
-    {
-      time: '14 Apr 2026 · 08:17',
-      asset: 'CV-08',
-      action: 'Ditandai Berisiko',
-      user: 'Sistem Validasi',
-      status: 'Warning',
-      note: 'Potensi duplikasi dengan issue serupa dalam 2 jam sebelumnya'
-    },
-    {
-      time: '14 Apr 2026 · 08:23',
-      asset: 'FL-12',
-      action: 'Revisi Field',
-      user: 'Supervisor Area',
-      status: 'Revised',
-      note: 'Lokasi diperbaiki ke Depot Barat setelah mismatch terdeteksi'
-    },
-    {
-      time: '14 Apr 2026 · 08:30',
-      asset: 'TR-77',
-      action: 'Disetujui untuk Penjadwalan',
-      user: 'Manajer Operasional',
-      status: 'Approved',
-      note: 'Data diterima dan diteruskan ke penjadwalan teknisi'
-    }
-  ]
-};
-
-function cloneDefaultState() {
-  return JSON.parse(JSON.stringify(defaultState));
-}
-
-function loadState() {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return cloneDefaultState();
-    const parsed = JSON.parse(raw);
-    return {
-      ...cloneDefaultState(),
-      ...parsed,
-      metrics: { ...cloneDefaultState().metrics, ...(parsed.metrics || {}) },
-      records: Array.isArray(parsed.records) ? parsed.records : [],
-      reviewQueue: Array.isArray(parsed.reviewQueue) ? parsed.reviewQueue : cloneDefaultState().reviewQueue,
-      auditData: Array.isArray(parsed.auditData) ? parsed.auditData : cloneDefaultState().auditData,
-    };
-  } catch {
-    return cloneDefaultState();
-  }
-}
-
-let state = loadState();
-
-const els = {
-  kpiTickets: document.getElementById('kpiTickets'),
-  kpiValidation: document.getElementById('kpiValidation'),
-  kpiReview: document.getElementById('kpiReview'),
-  kpiRisk: document.getElementById('kpiRisk'),
-  miniValidated: document.getElementById('miniValidated'),
-  miniNeedReview: document.getElementById('miniNeedReview'),
-  reviewList: document.getElementById('reviewList'),
-  auditRows: document.getElementById('auditRows'),
-  recordsRows: document.getElementById('recordsRows'),
-  statusFilter: document.getElementById('statusFilter'),
-  assetSearch: document.getElementById('assetSearch'),
-  exportCsv: document.getElementById('exportCsv'),
-  clearLocalData: document.getElementById('clearLocalData'),
-  summaryTotalRecords: document.getElementById('summaryTotalRecords'),
-  summaryValidRecords: document.getElementById('summaryValidRecords'),
-  summaryWarningRecords: document.getElementById('summaryWarningRecords'),
-  summaryApprovedRecords: document.getElementById('summaryApprovedRecords'),
-  form: document.getElementById('maintenanceForm'),
-  assetId: document.getElementById('assetId'),
-  location: document.getElementById('location'),
-  maintenanceType: document.getElementById('maintenanceType'),
-  maintenanceDate: document.getElementById('maintenanceDate'),
-  technician: document.getElementById('technician'),
-  workflowStatus: document.getElementById('workflowStatus'),
-  maintenanceNote: document.getElementById('maintenanceNote'),
-  validationBox: document.getElementById('validationBox'),
-  formFeedback: document.getElementById('formFeedback'),
-  formStatusPill: document.getElementById('formStatusPill'),
-  snapshotAsset: document.getElementById('snapshotAsset'),
-  snapshotLocation: document.getElementById('snapshotLocation'),
-  snapshotType: document.getElementById('snapshotType'),
-  snapshotAlert: document.getElementById('snapshotAlert'),
-  simulateClean: document.getElementById('simulateClean'),
-  simulateRisk: document.getElementById('simulateRisk'),
-  simulateApprove: document.getElementById('simulateApprove'),
-  sendReviewer: document.getElementById('sendReviewer'),
-  resetForm: document.getElementById('resetForm'),
-  analyzeAiBtn: document.getElementById('analyzeAiBtn'),
-  analyzeAiText: document.getElementById('analyzeAiText'),
-  aiAnalysisPanel: document.getElementById('aiAnalysisPanel'),
-  aiRiskBadge: document.getElementById('aiRiskBadge'),
-  aiSummary: document.getElementById('aiSummary'),
-  aiRiskReasons: document.getElementById('aiRiskReasons'),
-  aiRecommendations: document.getElementById('aiRecommendations'),
-  aiAnomaliesSection: document.getElementById('aiAnomaliesSection'),
-  aiAnomalies: document.getElementById('aiAnomalies'),
-  aiAnalyzedAt: document.getElementById('aiAnalyzedAt'),
-};
-
-function saveState() {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
-}
-
-function getNowLabel() {
-  return new Date().toLocaleString('id-ID', {
-    day: '2-digit',
-    month: 'short',
-    year: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit'
-  }).replace('.', ':');
-}
-
-function getStatusClass(status) {
-  switch (String(status).toLowerCase()) {
-    case 'valid':
-    case 'approved':
-      return 'badge badge-green';
-    case 'warning':
-      return 'badge badge-orange';
-    case 'revised':
-      return 'badge badge-blue';
-    case 'menunggu review':
-      return 'badge badge-orange';
-    default:
-      return 'badge';
-  }
-}
-
-function setFeedback(message = '', type = '') {
-  if (!els.formFeedback) return;
-  els.formFeedback.textContent = message;
-  els.formFeedback.className = `form-feedback${type ? ` ${type}` : ''}`;
-}
-
-function updateFormPill(text) {
-  if (els.formStatusPill) els.formStatusPill.textContent = text;
-}
-
-function getFormData() {
-  return {
-    assetId: els.assetId.value.trim(),
-    location: els.location.value.trim(),
-    maintenanceType: els.maintenanceType.value,
-    maintenanceDate: els.maintenanceDate.value,
-    technician: els.technician.value.trim(),
-    workflowStatus: els.workflowStatus.value,
-    maintenanceNote: els.maintenanceNote.value.trim(),
-  };
-}
-
-function validateForm(data) {
-  const messages = [];
-  const normalizedAsset = data.assetId.toUpperCase();
-  const normalizedLocation = data.location.toLowerCase();
-  const normalizedNote = data.maintenanceNote.toLowerCase();
-
-  if (!data.assetId || !data.location || !data.maintenanceType || !data.maintenanceDate || !data.technician || !data.maintenanceNote) {
-    messages.push({ type: 'error', text: 'Lengkapi semua field wajib sebelum menyimpan.' });
-  }
-
-  if (data.assetId && !/^[A-Za-z0-9-]{5,}$/.test(data.assetId)) {
-    messages.push({ type: 'warn', text: 'Format ID aset terlihat tidak standar.' });
-  } else if (data.assetId) {
-    messages.push({ type: 'ok', text: 'ID aset memenuhi format dasar.' });
-  }
-
-  const duplicate = state.records.find(record => record.assetId.toUpperCase() === normalizedAsset && record.maintenanceDate === data.maintenanceDate);
-  if (duplicate) {
-    messages.push({ type: 'warn', text: 'Kemungkinan duplikasi: aset ini sudah pernah disimpan di tanggal yang sama.' });
-  }
-
-  if (normalizedLocation && (normalizedLocation.includes('unknown') || normalizedLocation.length < 4)) {
-    messages.push({ type: 'warn', text: 'Lokasi perlu dibuat lebih spesifik agar mudah diaudit.' });
-  } else if (data.location) {
-    messages.push({ type: 'ok', text: 'Lokasi terisi cukup jelas.' });
-  }
-
-  if (data.maintenanceNote && data.maintenanceNote.length < 24) {
-    messages.push({ type: 'warn', text: 'Catatan maintenance terlalu singkat dan berisiko kurang informatif.' });
-  } else if (data.maintenanceNote) {
-    messages.push({ type: 'ok', text: 'Catatan cukup detail untuk review awal.' });
-  }
-
-  if (normalizedNote.includes('urgent') || normalizedNote.includes('abnormal') || normalizedNote.includes('critical')) {
-    messages.push({ type: 'warn', text: 'Catatan mengandung indikasi risiko, pertimbangkan kirim ke reviewer.' });
-  }
-
-  return messages;
-}
-
-function renderValidation(messages) {
-  if (!els.validationBox) return;
-  els.validationBox.innerHTML = '';
-
-  if (!messages.length) {
-    els.validationBox.innerHTML = '<div class="validation-item">Isi form untuk melihat hasil validasi.</div>';
-    return;
-  }
-
-  messages.forEach(message => {
-    const div = document.createElement('div');
-    const cls = message.type === 'ok' ? 'ok' : message.type === 'warn' ? 'warn' : 'error';
-    div.className = `validation-item ${cls}`;
-    div.textContent = message.text;
-    els.validationBox.appendChild(div);
+  // Scroll shadow
+  window.addEventListener("scroll", () => {
+    const nav = document.getElementById("navbar");
+    if (nav) nav.classList.toggle("scrolled", window.scrollY > 10);
   });
 }
 
-function updateSnapshot(data, messages) {
-  if (els.snapshotAsset) els.snapshotAsset.textContent = data.assetId || 'TRK-PLT-204';
-  if (els.snapshotLocation) els.snapshotLocation.textContent = data.location || 'Warehouse Bekasi 2';
-  if (els.snapshotType) els.snapshotType.textContent = data.maintenanceType || 'Preventive';
-  if (els.snapshotAlert) {
-    const summary = messages.slice(0, 3).map(msg => {
-      if (msg.type === 'ok') return `✓ ${msg.text}`;
-      if (msg.type === 'warn') return `⚠ ${msg.text}`;
-      return `✕ ${msg.text}`;
-    });
-    els.snapshotAlert.textContent = summary.length ? summary.join(' · ') : 'Isi form untuk melihat hasil validasi.';
-  }
+// ──────────────────────────────────────────────
+// KPI DASHBOARD
+// ──────────────────────────────────────────────
+function renderKPI() {
+  const records = getRecords();
+  const total   = records.length;
+  const valid   = records.filter(r => r.status === "Valid").length;
+  const warning = records.filter(r => r.status === "Warning" || r.status === "Menunggu Review").length;
+  const approved= records.filter(r => r.status === "Approved").length;
+  const high    = records.filter(r => r.aiRisk === "high").length;
+  const pct     = total > 0 ? Math.round((valid + approved) / total * 100) : 94;
+
+  const set = (id, val) => { const el = document.getElementById(id); if (el) el.textContent = val; };
+  set("kpiTickets",   total + 1276);
+  set("kpiValidation", pct + "%");
+  set("kpiReview",    warning);
+  set("kpiRisk",      high);
 }
 
-function renderKpis() {
-  if (els.kpiTickets) els.kpiTickets.textContent = state.metrics.tickets.toLocaleString('id-ID');
-  if (els.kpiValidation) els.kpiValidation.textContent = `${state.metrics.validation}%`;
-  if (els.kpiReview) els.kpiReview.textContent = state.metrics.review;
-  if (els.kpiRisk) els.kpiRisk.textContent = state.metrics.risk;
-  if (els.miniValidated) els.miniValidated.textContent = state.metrics.validatedMini;
-  if (els.miniNeedReview) els.miniNeedReview.textContent = state.metrics.needReviewMini;
-}
-
-function renderRecordsSummary() {
-  if (els.summaryTotalRecords) els.summaryTotalRecords.textContent = state.records.length;
-  if (els.summaryValidRecords) els.summaryValidRecords.textContent = state.records.filter(record => record.status === 'Valid').length;
-  if (els.summaryWarningRecords) els.summaryWarningRecords.textContent = state.records.filter(record => record.status === 'Warning').length;
-  if (els.summaryApprovedRecords) els.summaryApprovedRecords.textContent = state.records.filter(record => record.status === 'Approved').length;
-}
-
+// ──────────────────────────────────────────────
+// REVIEW QUEUE
+// ──────────────────────────────────────────────
 function renderReviewQueue() {
-  if (!els.reviewList) return;
-  els.reviewList.innerHTML = '';
+  const el = document.getElementById("reviewList");
+  if (!el) return;
 
-  if (!state.reviewQueue.length) {
-    els.reviewList.innerHTML = '<div class="empty-state">Tidak ada item review. Antrian sedang bersih.</div>';
+  const records = getRecords().filter(r =>
+    r.status === "Menunggu Review" || r.status === "Warning"
+  ).slice(0, 6);
+
+  if (records.length === 0) {
+    el.innerHTML = `<div class="review-empty">
+      <span>✅</span><p>Tidak ada item yang perlu direview saat ini.</p>
+    </div>`;
     return;
   }
 
-  state.reviewQueue.forEach(item => {
-    const div = document.createElement('div');
-    div.className = `review-item ${item.className}`;
-    div.innerHTML = `
-      <div class="review-main">
-        <strong>${item.asset}</strong>
-        <p>${item.note}</p>
-        <small>${item.location || '-'} · ${item.maintenanceType || '-'}</small>
+  el.innerHTML = records.map(r => `
+    <div class="review-item">
+      <div class="review-item-left">
+        <div class="review-asset">${r.assetId}</div>
+        <div class="review-meta">${r.location} · ${r.type}</div>
+        <div class="review-note">${r.note.substring(0, 80)}${r.note.length > 80 ? "…" : ""}</div>
       </div>
-      <div class="review-side">
-        <span>${item.level}</span>
-        <div class="review-actions-inline">
-          <button type="button" class="small-btn approve-btn" data-action="approve" data-id="${item.id}">Setujui</button>
-          <button type="button" class="small-btn revise-btn" data-action="revise" data-id="${item.id}">Minta Revisi</button>
-          <button type="button" class="small-btn risk-btn" data-action="risk" data-id="${item.id}">Tandai Risiko</button>
+      <div class="review-item-right">
+        <span class="status-pill ${statusClass(r.status)}">${r.status}</span>
+        <div class="review-actions">
+          <button class="btn-small btn-approve" data-id="${r.id}">Approve</button>
+          <button class="btn-small btn-reject"  data-id="${r.id}">Flag</button>
         </div>
       </div>
-    `;
-    els.reviewList.appendChild(div);
+    </div>
+  `).join("");
+
+  el.querySelectorAll(".btn-approve").forEach(btn => {
+    btn.addEventListener("click", () => {
+      updateRecordStatus(btn.dataset.id, "Approved", "Disetujui oleh supervisor via dashboard");
+      refreshDashboard();
+    });
+  });
+  el.querySelectorAll(".btn-reject").forEach(btn => {
+    btn.addEventListener("click", () => {
+      updateRecordStatus(btn.dataset.id, "Warning", "Diflag ulang oleh supervisor");
+      refreshDashboard();
+    });
   });
 }
 
-function getFilteredRecords() {
-  const selectedStatus = els.statusFilter?.value || 'Semua';
-  const keyword = (els.assetSearch?.value || '').trim().toLowerCase();
-
-  return state.records.filter(record => {
-    const matchesStatus = selectedStatus === 'Semua' || record.status === selectedStatus;
-    const matchesKeyword = !keyword || record.assetId.toLowerCase().includes(keyword);
-    return matchesStatus && matchesKeyword;
+function updateRecordStatus(id, newStatus, reason) {
+  const records = getRecords();
+  const rec = records.find(r => r.id === id);
+  if (!rec) return;
+  rec.status = newStatus;
+  saveRecords(records);
+  addAudit({
+    ts:      tsNow(),
+    assetId: rec.assetId,
+    action:  newStatus === "Approved" ? "Approved" : "Flagged",
+    user:    "Supervisor (Dashboard)",
+    status:  newStatus,
+    reason,
   });
 }
 
-function renderRecordsTable() {
-  if (!els.recordsRows) return;
-  const records = getFilteredRecords();
+function statusClass(status) {
+  const map = {
+    "Valid":           "status-valid",
+    "Warning":         "status-warning",
+    "Menunggu Review": "status-review",
+    "Approved":        "status-approved",
+    "Revised":         "status-revised",
+  };
+  return map[status] || "status-review";
+}
 
-  els.recordsRows.innerHTML = '';
+// ──────────────────────────────────────────────
+// RECORDS TABLE
+// ──────────────────────────────────────────────
+function renderRecordsTable(filter = "Semua", search = "") {
+  const el = document.getElementById("recordsRows");
+  if (!el) return;
 
-  if (!records.length) {
-    els.recordsRows.innerHTML = `<tr><td colspan="7" class="empty-table">Belum ada data yang cocok dengan pencarian atau filter yang dipilih.</td></tr>`;
+  let records = getRecords();
+  if (filter !== "Semua") records = records.filter(r => r.status === filter);
+  if (search.trim()) {
+    const q = search.trim().toLowerCase();
+    records = records.filter(r =>
+      r.assetId.toLowerCase().includes(q) ||
+      r.location.toLowerCase().includes(q) ||
+      r.technician.toLowerCase().includes(q)
+    );
+  }
+
+  // Summary counters
+  const all = getRecords();
+  const set = (id, val) => { const e = document.getElementById(id); if (e) e.textContent = val; };
+  set("summaryTotalRecords",   all.length);
+  set("summaryValidRecords",   all.filter(r => r.status === "Valid").length);
+  set("summaryWarningRecords", all.filter(r => r.status === "Warning" || r.status === "Menunggu Review").length);
+  set("summaryApprovedRecords",all.filter(r => r.status === "Approved").length);
+
+  if (records.length === 0) {
+    el.innerHTML = `<tr><td colspan="7" class="empty-state">Tidak ada data yang cocok.</td></tr>`;
     return;
   }
 
-  records.forEach(record => {
-    const tr = document.createElement('tr');
-    tr.innerHTML = `
-      <td><strong>${record.assetId}</strong></td>
-      <td>${record.location}</td>
-      <td>${record.maintenanceType}</td>
-      <td>${record.maintenanceDate || '-'}</td>
-      <td>${record.technician}</td>
-      <td><span class="${getStatusClass(record.status)}">${record.status}</span></td>
-      <td>${record.maintenanceNote}</td>
-    `;
-    els.recordsRows.appendChild(tr);
-  });
+  el.innerHTML = records.map(r => `
+    <tr>
+      <td><strong>${r.assetId}</strong></td>
+      <td>${r.location}</td>
+      <td>${r.type}</td>
+      <td>${r.date || "-"}</td>
+      <td>${r.technician}</td>
+      <td><span class="status-pill ${statusClass(r.status)}">${r.status}</span></td>
+      <td class="note-cell" title="${r.note}">${r.note.substring(0, 60)}${r.note.length > 60 ? "…" : ""}</td>
+    </tr>
+  `).join("");
 }
 
-function exportRecordsToCsv() {
-  const records = getFilteredRecords();
-
-  if (!records.length) {
-    setFeedback('Tidak ada data yang bisa diexport berdasarkan filter saat ini.', 'warn');
-    return;
-  }
-
-  const headers = ['ID Aset', 'Lokasi', 'Jenis Maintenance', 'Tanggal', 'Teknisi', 'Status', 'Catatan'];
-  const rows = records.map(record => [
-    record.assetId,
-    record.location,
-    record.maintenanceType,
-    record.maintenanceDate || '-',
-    record.technician,
-    record.status,
-    record.maintenanceNote,
-  ]);
-
-  const csvContent = [headers, ...rows]
-    .map(row => row.map(value => `"${String(value).replace(/"/g, '""')}"`).join(','))
-    .join('\n');
-
-  const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement('a');
-  link.href = url;
-  link.download = 'opsguard-records.csv';
-  document.body.appendChild(link);
-  link.click();
-  document.body.removeChild(link);
-  URL.revokeObjectURL(url);
-
-  setFeedback('Data berhasil diexport ke CSV.', 'success');
-}
-
+// ──────────────────────────────────────────────
+// AUDIT TABLE
+// ──────────────────────────────────────────────
 function renderAuditTable() {
-  if (!els.auditRows) return;
-  els.auditRows.innerHTML = '';
+  const el = document.getElementById("auditRows");
+  if (!el) return;
 
-  state.auditData.forEach(item => {
-    const tr = document.createElement('tr');
-    tr.innerHTML = `
-      <td>${item.time}</td>
-      <td><strong>${item.asset}</strong></td>
-      <td>${item.action}</td>
-      <td>${item.user}</td>
-      <td><span class="${getStatusClass(item.status)}">${item.status}</span></td>
-      <td>${item.note}</td>
-    `;
-    els.auditRows.appendChild(tr);
-  });
+  const audit = getAudit();
+  if (audit.length === 0) {
+    el.innerHTML = `<tr><td colspan="6" class="empty-state">Belum ada aksi yang tercatat.</td></tr>`;
+    return;
+  }
+
+  el.innerHTML = audit.slice(0, 50).map(a => `
+    <tr>
+      <td>${a.ts}</td>
+      <td><strong>${a.assetId}</strong></td>
+      <td>${a.action}</td>
+      <td>${a.user}</td>
+      <td><span class="status-pill ${statusClass(a.status)}">${a.status}</span></td>
+      <td class="note-cell">${a.reason}</td>
+    </tr>
+  `).join("");
 }
 
-function prependAuditRow(row) {
-  state.auditData.unshift(row);
-  state.auditData = state.auditData.slice(0, 30);
-}
-
-function persistAndRender() {
-  saveState();
-  renderKpis();
-  renderRecordsSummary();
+function refreshDashboard() {
+  renderKPI();
   renderReviewQueue();
-  renderRecordsTable();
+  renderRecordsTable(currentFilter(), currentSearch());
   renderAuditTable();
 }
 
-function recalculateValidation() {
-  const cleanRecords = state.records.filter(record => record.status === 'Valid' || record.status === 'Approved').length;
-  const total = Math.max(1, state.metrics.tickets);
-  const computed = Math.round((cleanRecords / total) * 100);
-  state.metrics.validation = Math.max(70, Math.min(99, computed || state.metrics.validation));
+function currentFilter() {
+  const el = document.getElementById("statusFilter");
+  return el ? el.value : "Semua";
+}
+function currentSearch() {
+  const el = document.getElementById("assetSearch");
+  return el ? el.value : "";
 }
 
-function createRecord(data, mode) {
-  const messages = validateForm(data);
-  const hasBlockingError = messages.some(message => message.type === 'error');
-  renderValidation(messages);
-  updateSnapshot(data, messages);
+// ──────────────────────────────────────────────
+// DEMO SIMULATION BUTTONS
+// ──────────────────────────────────────────────
+function initSimulationButtons() {
+  const btnClean  = document.getElementById("simulateClean");
+  const btnRisk   = document.getElementById("simulateRisk");
+  const btnApprove= document.getElementById("simulateApprove");
 
-  if (hasBlockingError) {
-    setFeedback('Form belum bisa diproses. Cek field wajib yang masih kosong.', 'error');
-    updateFormPill('Validasi Error');
-    return null;
-  }
-
-  const duplicateWarn = messages.some(message => message.text.includes('duplikasi'));
-  const riskWarn = messages.some(message => message.type === 'warn');
-
-  const record = {
-    id: `rec-${Date.now()}`,
-    ...data,
-    submittedAt: getNowLabel(),
-    status: mode === 'review' ? 'Menunggu Review' : duplicateWarn || riskWarn ? 'Warning' : 'Valid',
-  };
-
-  state.records.unshift(record);
-  state.metrics.tickets += 1;
-
-  if (record.status === 'Valid') {
-    state.metrics.validatedMini += 1;
-  }
-
-  if (mode === 'review' || record.status === 'Warning') {
-    state.metrics.review += 1;
-    state.metrics.needReviewMini += 1;
-    if (record.status === 'Warning') state.metrics.risk += 1;
-
-    state.reviewQueue.unshift({
-      id: `queue-${record.id}`,
-      asset: record.assetId,
-      note: record.maintenanceNote,
-      level: record.status === 'Warning' ? 'Tinggi' : 'Sedang',
-      className: record.status === 'Warning' ? 'critical' : 'medium',
-      location: record.location,
-      maintenanceType: record.maintenanceType,
-      sourceRecordId: record.id,
-    });
-  }
-
-  prependAuditRow({
-    time: record.submittedAt,
-    asset: record.assetId,
-    action: mode === 'review' ? 'Dikirim ke Reviewer' : 'Data Disimpan',
-    user: record.technician,
-    status: record.status,
-    note: mode === 'review' ? 'Data diarahkan ke antrian review untuk keputusan supervisor' : 'Data disimpan di browser secara lokal'
-  });
-
-  recalculateValidation();
-  persistAndRender();
-
-  setFeedback(mode === 'review' ? 'Data berhasil dikirim ke reviewer.' : 'Data berhasil disimpan di browser.', 'success');
-  updateFormPill(mode === 'review' ? 'Terkirim ke Reviewer' : 'Tersimpan Lokal');
-  return record;
-}
-
-function resetFormState() {
-  if (els.form) els.form.reset();
-  if (els.workflowStatus) els.workflowStatus.value = 'Menunggu Approval';
-  renderValidation([]);
-  updateSnapshot({}, []);
-  setFeedback('');
-  updateFormPill('Siap Diisi');
-  // Hide AI panel
-  if (els.aiAnalysisPanel) els.aiAnalysisPanel.style.display = 'none';
-}
-
-// --- AI Analysis ---
-let aiLoading = false;
-
-async function analyzeWithAI() {
-  if (aiLoading) return;
-  const data = getFormData();
-
-  if (!data.assetId || !data.maintenanceNote) {
-    setFeedback('Isi ID Aset dan Catatan Maintenance terlebih dahulu.', 'warn');
-    return;
-  }
-
-  aiLoading = true;
-  if (els.analyzeAiText) els.analyzeAiText.textContent = '⏳ Menganalisis...';
-  if (els.analyzeAiBtn) els.analyzeAiBtn.disabled = true;
-  setFeedback('', '');
-
-  try {
-    const response = await fetch(`${BACKEND_URL}/api/analyze`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        asset_id: data.assetId,
-        location: data.location,
-        maintenance_type: data.maintenanceType,
-        technician: data.technician,
-        maintenance_note: data.maintenanceNote,
-      }),
-    });
-
-    if (!response.ok) throw new Error(`Server error: ${response.status}`);
-
-    const result = await response.json();
-
-    if (!result.success) throw new Error(result.detail || 'Analysis failed');
-
-    const analysis = result.data;
-
-    // Show AI panel
-    if (els.aiAnalysisPanel) {
-      els.aiAnalysisPanel.style.display = 'block';
-    }
-
-    // Risk badge
-    const riskColors = {
-      low: '#27ae60',
-      medium: '#f39c12',
-      high: '#e67e22',
-      critical: '#c0392b',
+  if (btnClean) btnClean.addEventListener("click", () => {
+    const rec = {
+      id: "REC-SIM-" + Date.now(),
+      assetId: "SIM-CLN-" + Math.floor(Math.random() * 900 + 100),
+      location: "Warehouse Demo",
+      type: "Preventive Maintenance",
+      date: new Date().toISOString().slice(0, 10),
+      technician: "Demo Teknisi",
+      status: "Valid",
+      note: "Simulasi data bersih: semua parameter normal, tidak ada anomali terdeteksi.",
+      aiRisk: "low",
+      ts: tsNow(),
     };
-    const riskLabels = {
-      low: 'Rendah',
-      medium: 'Sedang',
-      high: 'Tinggi',
-      critical: 'Kritis',
+    const records = getRecords();
+    records.unshift(rec);
+    saveRecords(records);
+    addAudit({ ts: tsNow(), assetId: rec.assetId, action: "Auto-Validated", user: "AI Validator", status: "Valid", reason: "Data clean simulation" });
+    refreshDashboard();
+    showToast("✅ Simulasi data bersih ditambahkan!", "success");
+  });
+
+  if (btnRisk) btnRisk.addEventListener("click", () => {
+    const rec = {
+      id: "REC-SIM-" + Date.now(),
+      assetId: "SIM-RSK-" + Math.floor(Math.random() * 900 + 100),
+      location: "Area Berisiko",
+      type: "Emergency Repair",
+      date: new Date().toISOString().slice(0, 10),
+      technician: "Demo Teknisi",
+      status: "Menunggu Review",
+      note: "⚠ Simulasi data berisiko: kerusakan tidak terduga, potensi downtime tinggi, butuh review supervisor.",
+      aiRisk: "high",
+      ts: tsNow(),
     };
-
-    if (els.aiRiskBadge) {
-      els.aiRiskBadge.textContent = `${riskLabels[analysis.risk_level] || analysis.risk_level} (${analysis.risk_score})`;
-      els.aiRiskBadge.style.background = riskColors[analysis.risk_level] || '#95a5a6';
-    }
-
-    // Summary
-    if (els.aiSummary) {
-      els.aiSummary.textContent = analysis.summary || '';
-    }
-
-    // Risk reasons
-    if (els.aiRiskReasons) {
-      els.aiRiskReasons.innerHTML = '';
-      (analysis.risk_reasons || []).forEach(reason => {
-        const li = document.createElement('li');
-        li.textContent = reason;
-        els.aiRiskReasons.appendChild(li);
-      });
-    }
-
-    // Recommendations
-    if (els.aiRecommendations) {
-      els.aiRecommendations.innerHTML = '';
-      (analysis.recommendations || []).forEach(rec => {
-        const li = document.createElement('li');
-        li.textContent = rec;
-        els.aiRecommendations.appendChild(li);
-      });
-    }
-
-    // Anomalies (if any)
-    const hasAnomalies = analysis.anomalies && analysis.anomalies.length > 0;
-    if (els.aiAnomaliesSection) {
-      els.aiAnomaliesSection.style.display = hasAnomalies ? 'block' : 'none';
-    }
-    if (hasAnomalies && els.aiAnomalies) {
-      els.aiAnomalies.innerHTML = '';
-      analysis.anomalies.forEach(anom => {
-        const li = document.createElement('li');
-        li.textContent = anom;
-        els.aiAnomalies.appendChild(li);
-      });
-    }
-
-    // Timestamp
-    if (els.aiAnalyzedAt) {
-      const time = new Date(analysis.analyzed_at).toLocaleString('id-ID', {
-        day: '2-digit', month: 'short', year: 'numeric',
-        hour: '2-digit', minute: '2-digit',
-      });
-      els.aiAnalyzedAt.textContent = `Dianalisis: ${time}`;
-    }
-
-    // Add flagged keywords to validation
-    if (analysis.flagged_keywords && analysis.flagged_keywords.length > 0) {
-      const messages = validateForm(data);
-      messages.push({
-        type: 'warn',
-        text: `AI mendeteksi keyword mencurigakan: ${analysis.flagged_keywords.join(', ')}`,
-      });
-      renderValidation(messages);
-      updateSnapshot(data, messages);
-    }
-
-    updateFormPill(`AI: ${riskLabels[analysis.risk_level]}`);
-    setFeedback('Analisis AI berhasil. Lihat hasil di panel bawah form.', 'success');
-
-  } catch (err) {
-    console.error('AI analysis error:', err);
-    setFeedback(`Gagal memanggil AI: ${err.message}. Pastikan backend berjalan di port 8000.`, 'error');
-  } finally {
-    aiLoading = false;
-    if (els.analyzeAiText) els.analyzeAiText.textContent = '🔍 Analisis dengan AI';
-    if (els.analyzeAiBtn) els.analyzeAiBtn.disabled = false;
-  }
-}
-
-function clearLocalDemoData() {
-  localStorage.removeItem(STORAGE_KEY);
-  state = cloneDefaultState();
-  if (els.statusFilter) els.statusFilter.value = 'Semua';
-  if (els.assetSearch) els.assetSearch.value = '';
-  resetFormState();
-  persistAndRender();
-  setFeedback('Seluruh data lokal berhasil dibersihkan. Demo kembali ke kondisi awal.', 'success');
-}
-
-function processQueueAction(action, id) {
-  const index = state.reviewQueue.findIndex(item => item.id === id);
-  if (index === -1) return;
-
-  const item = state.reviewQueue[index];
-  const relatedRecord = state.records.find(record => item.sourceRecordId && record.id === item.sourceRecordId);
-
-  if (action === 'approve') {
-    state.reviewQueue.splice(index, 1);
-    state.metrics.review = Math.max(0, state.metrics.review - 1);
-    state.metrics.needReviewMini = Math.max(0, state.metrics.needReviewMini - 1);
-    if (item.className === 'critical') state.metrics.risk = Math.max(0, state.metrics.risk - 1);
-    if (relatedRecord) relatedRecord.status = 'Approved';
-    prependAuditRow({
-      time: getNowLabel(),
-      asset: item.asset,
-      action: 'Disetujui Reviewer',
-      user: 'Supervisor Demo',
-      status: 'Approved',
-      note: 'Data disetujui dan siap diteruskan ke penjadwalan'
-    });
-    setFeedback(`${item.asset} berhasil disetujui.`, 'success');
-  }
-
-  if (action === 'revise') {
-    state.reviewQueue[index].level = 'Sedang';
-    state.reviewQueue[index].className = 'medium';
-    state.reviewQueue[index].note = `Perlu revisi: ${item.note}`;
-    if (relatedRecord) relatedRecord.status = 'Revised';
-    prependAuditRow({
-      time: getNowLabel(),
-      asset: item.asset,
-      action: 'Diminta Revisi',
-      user: 'Supervisor Demo',
-      status: 'Revised',
-      note: 'Supervisor meminta klarifikasi tambahan sebelum approval'
-    });
-    setFeedback(`${item.asset} diminta revisi.`, 'warn');
-  }
-
-  if (action === 'risk') {
-    state.reviewQueue[index].level = 'Tinggi';
-    state.reviewQueue[index].className = 'critical';
-    state.reviewQueue[index].note = `Risiko ditingkatkan: ${item.note}`;
-    state.metrics.risk += 1;
-    if (relatedRecord) relatedRecord.status = 'Warning';
-    prependAuditRow({
-      time: getNowLabel(),
-      asset: item.asset,
-      action: 'Risiko Dinaikkan',
-      user: 'Supervisor Demo',
-      status: 'Warning',
-      note: 'Data dinaikkan menjadi high risk untuk perhatian manajemen'
-    });
-    setFeedback(`${item.asset} ditandai sebagai risiko tinggi.`, 'warn');
-  }
-
-  recalculateValidation();
-  persistAndRender();
-}
-
-function bindFormEvents() {
-  const watchedInputs = [
-    els.assetId,
-    els.location,
-    els.maintenanceType,
-    els.maintenanceDate,
-    els.technician,
-    els.workflowStatus,
-    els.maintenanceNote,
-  ].filter(Boolean);
-
-  watchedInputs.forEach(input => {
-    input.addEventListener('input', () => {
-      const data = getFormData();
-      const messages = validateForm(data);
-      renderValidation(messages);
-      updateSnapshot(data, messages);
-      updateFormPill('Sedang Diedit');
-    });
+    const records = getRecords();
+    records.unshift(rec);
+    saveRecords(records);
+    addAudit({ ts: tsNow(), assetId: rec.assetId, action: "Flagged for Review", user: "AI Validator", status: "Menunggu Review", reason: "High-risk simulation: emergency repair dengan anomali" });
+    refreshDashboard();
+    showToast("⚠️ Simulasi data berisiko masuk review queue!", "warning");
   });
 
-  els.form?.addEventListener('submit', (event) => {
-    event.preventDefault();
-    createRecord(getFormData(), 'save');
-  });
-
-  els.sendReviewer?.addEventListener('click', () => {
-    createRecord(getFormData(), 'review');
-  });
-
-  els.resetForm?.addEventListener('click', () => {
-    resetFormState();
-  });
-
-  els.analyzeAiBtn?.addEventListener('click', () => {
-    analyzeWithAI();
-  });
-
-  els.statusFilter?.addEventListener('change', () => {
-    renderRecordsTable();
-  });
-
-  els.assetSearch?.addEventListener('input', () => {
-    renderRecordsTable();
-  });
-
-  els.exportCsv?.addEventListener('click', () => {
-    exportRecordsToCsv();
-  });
-
-  els.clearLocalData?.addEventListener('click', () => {
-    clearLocalDemoData();
-  });
-}
-
-function bindDemoButtons() {
-  els.simulateClean?.addEventListener('click', () => {
-    const record = {
-      assetId: `SIM-${state.metrics.tickets + 1}`,
-      location: 'Gudang Demo A',
-      maintenanceType: 'Inspection',
-      maintenanceDate: new Date().toISOString().slice(0, 10),
-      technician: 'Pengguna Demo',
-      workflowStatus: 'Draft',
-      maintenanceNote: 'Pemeriksaan rutin selesai dilakukan dengan detail lengkap dan format yang sesuai.'
-    };
-    createRecord(record, 'save');
-  });
-
-  els.simulateRisk?.addEventListener('click', () => {
-    const record = {
-      assetId: `RISK-${state.metrics.tickets + 1}`,
-      location: 'Unknown',
-      maintenanceType: 'Emergency Repair',
-      maintenanceDate: new Date().toISOString().slice(0, 10),
-      technician: 'Sistem Validasi',
-      workflowStatus: 'Sedang Direview',
-      maintenanceNote: 'Critical abnormal vibration detected. urgent repeat abnormal issue.'
-    };
-    createRecord(record, 'review');
-  });
-
-  els.simulateApprove?.addEventListener('click', () => {
-    if (!state.reviewQueue.length) {
-      setFeedback('Tidak ada item review untuk disetujui.', 'warn');
+  if (btnApprove) btnApprove.addEventListener("click", () => {
+    const records = getRecords();
+    const pending = records.filter(r => r.status === "Menunggu Review" || r.status === "Warning");
+    if (pending.length === 0) {
+      showToast("Tidak ada item di review queue.", "info");
       return;
     }
-    processQueueAction('approve', state.reviewQueue[0].id);
+    const target = pending[0];
+    target.status = "Approved";
+    saveRecords(records);
+    addAudit({ ts: tsNow(), assetId: target.assetId, action: "Approved", user: "Supervisor (Simulasi)", status: "Approved", reason: "Simulasi approval oleh supervisor" });
+    refreshDashboard();
+    showToast("✅ 1 item berhasil di-approve!", "success");
   });
 }
 
-els.reviewList?.addEventListener('click', (event) => {
-  const button = event.target.closest('button[data-action]');
-  if (!button) return;
-  processQueueAction(button.dataset.action, button.dataset.id);
-});
+// ──────────────────────────────────────────────
+// FORM VALIDATION (real-time)
+// ──────────────────────────────────────────────
+function initFormValidation() {
+  const form = document.getElementById("maintenanceForm");
+  if (!form) return;
 
-bindFormEvents();
-bindDemoButtons();
-persistAndRender();
-if (els.validationBox) renderValidation([]);
-updateSnapshot({}, []);
+  const fields = ["assetId", "location", "maintenanceType", "maintenanceDate", "technician", "maintenanceNote"];
+  fields.forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.addEventListener("input", runValidation);
+  });
 
-const revealItems = document.querySelectorAll('.issue-card, .kpi-card, .card, .table-card, .summary-card, .impact-card, .demo-toolbar, .records-toolbar, .summary-mini-card');
+  function runValidation() {
+    const assetId  = (document.getElementById("assetId")?.value || "").trim();
+    const location = (document.getElementById("location")?.value || "").trim();
+    const type     = document.getElementById("maintenanceType")?.value || "";
+    const date     = document.getElementById("maintenanceDate")?.value || "";
+    const tech     = (document.getElementById("technician")?.value || "").trim();
+    const note     = (document.getElementById("maintenanceNote")?.value || "").trim();
 
-const revealObserver = new IntersectionObserver((entries) => {
-  entries.forEach((entry) => {
-    if (entry.isIntersecting) {
-      entry.target.classList.add('show');
-      revealObserver.unobserve(entry.target);
+    const checks = [];
+
+    // Asset ID format
+    if (assetId.length === 0) {
+      checks.push({ ok: false, msg: "ID Aset wajib diisi." });
+    } else if (!/^[A-Z]{2,5}-[A-Z]{2,5}-\d{2,5}$/i.test(assetId)) {
+      checks.push({ ok: false, msg: "Format ID Aset tidak standar (contoh: TRK-PLT-204)." });
+    } else {
+      checks.push({ ok: true,  msg: "Format ID Aset valid ✓" });
+    }
+
+    // Location
+    if (location.length < 5) checks.push({ ok: false, msg: "Lokasi terlalu pendek." });
+    else checks.push({ ok: true, msg: "Lokasi terisi ✓" });
+
+    // Type
+    if (!type) checks.push({ ok: false, msg: "Jenis maintenance belum dipilih." });
+    else checks.push({ ok: true, msg: `Jenis: ${type} ✓` });
+
+    // Date
+    if (!date) {
+      checks.push({ ok: false, msg: "Tanggal belum diisi." });
+    } else {
+      const d = new Date(date);
+      const today = new Date();
+      const diffDays = (today - d) / 86400000;
+      if (diffDays > 30) checks.push({ ok: false, msg: "⚠ Tanggal lebih dari 30 hari lalu — periksa kembali." });
+      else if (diffDays < -1) checks.push({ ok: false, msg: "⚠ Tanggal di masa depan — tidak valid." });
+      else checks.push({ ok: true, msg: "Tanggal valid ✓" });
+    }
+
+    // Technician
+    if (tech.length < 3) checks.push({ ok: false, msg: "Nama teknisi terlalu pendek." });
+    else checks.push({ ok: true, msg: "Teknisi terisi ✓" });
+
+    // Note
+    if (note.length < 15) checks.push({ ok: false, msg: "Catatan terlalu singkat (min. 15 karakter)." });
+    else if (note.length > 500) checks.push({ ok: false, msg: "Catatan terlalu panjang (maks. 500 karakter)." });
+    else checks.push({ ok: true, msg: "Catatan maintenance ✓" });
+
+    // Check duplicate
+    const existing = getRecords().find(r =>
+      r.assetId.toLowerCase() === assetId.toLowerCase() &&
+      r.date === date
+    );
+    if (existing) {
+      checks.push({ ok: false, msg: `⚠ Duplikasi: ${assetId} sudah ada di tanggal ${date}.` });
+    }
+
+    renderValidationBox(checks);
+  }
+
+  runValidation();
+}
+
+function renderValidationBox(checks) {
+  const box = document.getElementById("validationBox");
+  if (!box) return;
+  box.innerHTML = checks.map(c => `
+    <div class="validation-item ${c.ok ? "ok" : "err"}">
+      <span>${c.ok ? "✓" : "✗"}</span> ${c.msg}
+    </div>
+  `).join("");
+}
+
+// ──────────────────────────────────────────────
+// AI ANALYSIS — GEMINI
+// ──────────────────────────────────────────────
+function initAiAnalysis() {
+  const btn = document.getElementById("analyzeAiBtn");
+  if (!btn) return;
+
+  btn.addEventListener("click", async () => {
+    const assetId  = document.getElementById("assetId")?.value?.trim() || "";
+    const location = document.getElementById("location")?.value?.trim() || "";
+    const type     = document.getElementById("maintenanceType")?.value || "";
+    const date     = document.getElementById("maintenanceDate")?.value || "";
+    const tech     = document.getElementById("technician")?.value?.trim() || "";
+    const note     = document.getElementById("maintenanceNote")?.value?.trim() || "";
+    const workflow = document.getElementById("workflowStatus")?.value || "";
+
+    if (!assetId || !note || !type) {
+      showToast("Isi minimal: ID Aset, Jenis Maintenance, dan Catatan terlebih dahulu.", "warning");
+      return;
+    }
+
+    // Check if API key is configured
+    if (GEMINI_API_KEY === "YOUR_GEMINI_API_KEY_HERE") {
+      // Fallback mode — rule-based analysis
+      runRuleBasedAnalysis(assetId, location, type, date, note, workflow);
+      return;
+    }
+
+    // Show loading
+    const panel = document.getElementById("aiAnalysisPanel");
+    const btnText = document.getElementById("analyzeAiText");
+    btnText.textContent = "⏳ Menganalisis...";
+    btn.disabled = true;
+    if (panel) panel.style.display = "block";
+    document.getElementById("aiSummary").textContent = "AI sedang menganalisis data maintenance...";
+
+    const prompt = `Kamu adalah sistem AI untuk governance dan validasi data maintenance industri.
+
+Analisis data maintenance berikut dan berikan output dalam format JSON:
+
+Data Input:
+- ID Aset: ${assetId}
+- Lokasi: ${location}
+- Jenis Maintenance: ${type}
+- Tanggal: ${date}
+- Teknisi: ${tech}
+- Catatan: ${note}
+- Status Workflow: ${workflow}
+
+Berikan output JSON dengan struktur berikut (hanya JSON, tanpa teks lain):
+{
+  "riskLevel": "low" | "medium" | "high",
+  "riskScore": angka 0-100,
+  "summary": "ringkasan singkat 1-2 kalimat dalam Bahasa Indonesia",
+  "riskReasons": ["alasan 1", "alasan 2"],
+  "recommendations": ["rekomendasi 1", "rekomendasi 2"],
+  "anomalies": ["anomali 1"] // kosong jika tidak ada,
+  "suggestedStatus": "Valid" | "Menunggu Review" | "Warning"
+}`;
+
+    try {
+      const resp = await fetch(GEMINI_URL, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          contents: [{ parts: [{ text: prompt }] }],
+          generationConfig: { temperature: 0.3, maxOutputTokens: 500 }
+        })
+      });
+
+      if (!resp.ok) throw new Error(`API Error: ${resp.status}`);
+
+      const data = await resp.json();
+      const raw  = data?.candidates?.[0]?.content?.parts?.[0]?.text || "{}";
+      const clean = raw.replace(/```json|```/g, "").trim();
+      const result = JSON.parse(clean);
+      renderAiResult(result, assetId);
+
+    } catch (err) {
+      console.warn("Gemini error, fallback to rule-based:", err);
+      runRuleBasedAnalysis(assetId, location, type, date, note, workflow);
+    } finally {
+      btnText.textContent = "🔍 Analisis dengan AI";
+      btn.disabled = false;
     }
   });
-}, { threshold: 0.12 });
+}
 
-revealItems.forEach(item => {
-  item.classList.add('reveal');
-  revealObserver.observe(item);
+// Rule-based fallback (works tanpa API key)
+function runRuleBasedAnalysis(assetId, location, type, date, note, workflow) {
+  const noteLower = note.toLowerCase();
+  let riskScore = 20;
+  const riskReasons = [];
+  const anomalies = [];
+
+  if (type === "Emergency Repair")        { riskScore += 40; riskReasons.push("Jenis Emergency Repair berisiko tinggi."); }
+  if (type === "Corrective Maintenance")  { riskScore += 20; riskReasons.push("Corrective Maintenance menandakan ada kerusakan."); }
+
+  const highWords = ["bocor", "rusak", "kritis", "darurat", "gagal", "patah", "off", "tidak bisa"];
+  const hitWords  = highWords.filter(w => noteLower.includes(w));
+  if (hitWords.length > 0) {
+    riskScore += hitWords.length * 15;
+    riskReasons.push(`Kata berisiko terdeteksi: ${hitWords.join(", ")}.`);
+  }
+
+  const existing = getRecords().filter(r =>
+    r.assetId.toLowerCase() === assetId.toLowerCase()
+  );
+  if (existing.length >= 2) {
+    riskScore += 20;
+    anomalies.push(`Aset ${assetId} sudah ${existing.length} kali masuk maintenance — pola berulang.`);
+    riskReasons.push("Frekuensi maintenance tinggi untuk aset ini.");
+  }
+
+  riskScore = Math.min(riskScore, 100);
+  const riskLevel   = riskScore >= 70 ? "high" : riskScore >= 40 ? "medium" : "low";
+  const suggested   = riskScore >= 70 ? "Warning" : riskScore >= 40 ? "Menunggu Review" : "Valid";
+
+  const recommendations = [];
+  if (riskLevel === "high")   recommendations.push("Kirim ke review supervisor sebelum dilanjutkan.", "Dokumentasikan root cause secara lengkap.");
+  if (riskLevel === "medium") recommendations.push("Verifikasi catatan maintenance lebih detail.", "Cek histori aset sebelumnya.");
+  if (riskLevel === "low")    recommendations.push("Data terlihat valid dan konsisten.", "Bisa langsung disimpan.");
+
+  renderAiResult({ riskLevel, riskScore, summary: `Analisis rule-based: tingkat risiko ${riskLevel} (skor ${riskScore}/100).`, riskReasons, recommendations, anomalies, suggestedStatus: suggested }, assetId);
+
+  // Show note about fallback
+  const panel = document.getElementById("aiAnalysisPanel");
+  if (panel) {
+    const note2 = document.createElement("p");
+    note2.style.cssText = "font-size:11px;color:#888;margin-top:8px;padding:8px;background:#f8f9fa;border-radius:6px;";
+    note2.innerHTML = `💡 <em>Mode rule-based aktif. Untuk analisis AI penuh, tambahkan Gemini API Key di main.js baris 8. <a href="https://ai.google.dev" target="_blank">Dapatkan gratis di ai.google.dev</a></em>`;
+    panel.appendChild(note2);
+  }
+}
+
+function renderAiResult(result, assetId) {
+  const panel  = document.getElementById("aiAnalysisPanel");
+  if (!panel) return;
+  panel.style.display = "block";
+
+  const badge  = document.getElementById("aiRiskBadge");
+  const summary= document.getElementById("aiSummary");
+  const reasons= document.getElementById("aiRiskReasons");
+  const recs   = document.getElementById("aiRecommendations");
+  const anomSec= document.getElementById("aiAnomaliesSection");
+  const anomList=document.getElementById("aiAnomalies");
+  const analyzedAt = document.getElementById("aiAnalyzedAt");
+
+  const riskMap = { low: "🟢 Risiko Rendah", medium: "🟡 Risiko Sedang", high: "🔴 Risiko Tinggi" };
+  const classMap= { low: "badge-low", medium: "badge-medium", high: "badge-high" };
+
+  badge.textContent = riskMap[result.riskLevel] || "Tidak Diketahui";
+  badge.className   = "ai-badge " + (classMap[result.riskLevel] || "");
+  summary.textContent = result.summary || "";
+  reasons.innerHTML = (result.riskReasons || []).map(r => `<li>${r}</li>`).join("");
+  recs.innerHTML    = (result.recommendations || []).map(r => `<li>${r}</li>`).join("");
+
+  if (result.anomalies && result.anomalies.length > 0) {
+    anomSec.style.display = "block";
+    anomList.innerHTML = result.anomalies.map(a => `<li>${a}</li>`).join("");
+  } else {
+    anomSec.style.display = "none";
+  }
+
+  analyzedAt.textContent = `Dianalisis: ${tsNow()} · Aset: ${assetId}`;
+
+  // Update status pill
+  const pill = document.getElementById("formStatusPill");
+  if (pill && result.suggestedStatus) {
+    pill.textContent = `AI Saran: ${result.suggestedStatus}`;
+    pill.className   = `status-pill ${statusClass(result.suggestedStatus)}`;
+  }
+}
+
+// ──────────────────────────────────────────────
+// FORM SUBMIT — SAVE RECORD
+// ──────────────────────────────────────────────
+function initFormSubmit() {
+  const form = document.getElementById("maintenanceForm");
+  if (!form) return;
+
+  form.addEventListener("submit", (e) => {
+    e.preventDefault();
+
+    const assetId  = document.getElementById("assetId")?.value?.trim() || "";
+    const location = document.getElementById("location")?.value?.trim() || "";
+    const type     = document.getElementById("maintenanceType")?.value || "";
+    const date     = document.getElementById("maintenanceDate")?.value || "";
+    const tech     = document.getElementById("technician")?.value?.trim() || "";
+    const note     = document.getElementById("maintenanceNote")?.value?.trim() || "";
+    const workflow = document.getElementById("workflowStatus")?.value || "Menunggu Approval";
+
+    if (!assetId || !location || !type || !date || !tech || !note) {
+      showToast("Semua field wajib diisi sebelum menyimpan.", "warning");
+      return;
+    }
+
+    // Determine status & risk from AI panel if available
+    const badge    = document.getElementById("aiRiskBadge");
+    const hasAI    = badge && badge.textContent && badge.textContent !== "-";
+    const riskText = hasAI ? badge.textContent : "";
+    const aiRisk   = riskText.includes("Tinggi") ? "high" : riskText.includes("Sedang") ? "medium" : "low";
+
+    let status = "Valid";
+    if (workflow === "Menunggu Approval" || workflow === "Sedang Direview") status = "Menunggu Review";
+    if (aiRisk === "high") status = "Warning";
+
+    const rec = {
+      id:         "REC-" + Date.now(),
+      assetId, location, type, date,
+      technician: tech,
+      status,
+      note,
+      aiRisk,
+      ts:         tsNow(),
+    };
+
+    const records = getRecords();
+    records.unshift(rec);
+    saveRecords(records);
+
+    addAudit({
+      ts:      tsNow(),
+      assetId,
+      action:  "Submitted",
+      user:    tech,
+      status,
+      reason:  hasAI ? `AI risk: ${riskText}` : "Data dikirim manual",
+    });
+
+    // Feedback
+    const fb = document.getElementById("formFeedback");
+    if (fb) {
+      fb.innerHTML = `<div class="feedback-success">✅ Data berhasil disimpan dengan status <strong>${status}</strong>. <a href="dashboard.html#records">Lihat di dashboard →</a></div>`;
+      setTimeout(() => { fb.innerHTML = ""; }, 5000);
+    }
+
+    // Reset
+    form.reset();
+    const pill = document.getElementById("formStatusPill");
+    if (pill) { pill.textContent = "Siap Diisi"; pill.className = "status-pill status-live"; }
+    const panel = document.getElementById("aiAnalysisPanel");
+    if (panel) panel.style.display = "none";
+    renderValidationBox([{ ok: false, msg: "Isi form untuk melihat hasil validasi." }]);
+
+    showToast(`✅ Record ${assetId} disimpan!`, "success");
+  });
+
+  // Send to reviewer
+  const sendBtn = document.getElementById("sendReviewer");
+  if (sendBtn) sendBtn.addEventListener("click", () => {
+    const assetId  = document.getElementById("assetId")?.value?.trim() || "";
+    const location = document.getElementById("location")?.value?.trim() || "";
+    const type     = document.getElementById("maintenanceType")?.value || "";
+    const date     = document.getElementById("maintenanceDate")?.value || "";
+    const tech     = document.getElementById("technician")?.value?.trim() || "";
+    const note     = document.getElementById("maintenanceNote")?.value?.trim() || "";
+
+    if (!assetId || !type || !date) {
+      showToast("Isi minimal ID Aset, Jenis Maintenance, dan Tanggal.", "warning");
+      return;
+    }
+
+    const rec = {
+      id:         "REC-" + Date.now(),
+      assetId, location, type, date,
+      technician: tech || "Unknown",
+      status:     "Menunggu Review",
+      note:       note || "Dikirim ke reviewer tanpa catatan.",
+      aiRisk:     "medium",
+      ts:         tsNow(),
+    };
+
+    const records = getRecords();
+    records.unshift(rec);
+    saveRecords(records);
+    addAudit({ ts: tsNow(), assetId, action: "Sent to Reviewer", user: tech || "Unknown", status: "Menunggu Review", reason: "Dikirim manual ke reviewer" });
+    showToast(`📤 ${assetId} masuk review queue supervisor!`, "success");
+  });
+
+  // Reset button
+  const resetBtn = document.getElementById("resetForm");
+  if (resetBtn) resetBtn.addEventListener("click", () => {
+    const form2 = document.getElementById("maintenanceForm");
+    if (form2) form2.reset();
+    const panel = document.getElementById("aiAnalysisPanel");
+    if (panel) panel.style.display = "none";
+    renderValidationBox([{ ok: false, msg: "Isi form untuk melihat hasil validasi." }]);
+    const pill = document.getElementById("formStatusPill");
+    if (pill) { pill.textContent = "Siap Diisi"; pill.className = "status-pill status-live"; }
+    showToast("Form direset.", "info");
+  });
+}
+
+// ──────────────────────────────────────────────
+// EXPORT CSV
+// ──────────────────────────────────────────────
+function initExport() {
+  const btn = document.getElementById("exportCsv");
+  if (!btn) return;
+
+  btn.addEventListener("click", () => {
+    const records = getRecords();
+    if (records.length === 0) { showToast("Tidak ada data untuk diekspor.", "info"); return; }
+
+    const header = ["ID","ID Aset","Lokasi","Jenis","Tanggal","Teknisi","Status","Catatan"];
+    const rows   = records.map(r =>
+      [r.id, r.assetId, r.location, r.type, r.date, r.technician, r.status, `"${r.note.replace(/"/g,'""')}"`].join(",")
+    );
+    const csv  = [header.join(","), ...rows].join("\n");
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+    const url  = URL.createObjectURL(blob);
+    const a    = document.createElement("a");
+    a.href     = url;
+    a.download = `opsguard-records-${new Date().toISOString().slice(0,10)}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+    showToast("✅ CSV berhasil diekspor!", "success");
+  });
+}
+
+// ──────────────────────────────────────────────
+// CLEAR LOCAL DATA
+// ──────────────────────────────────────────────
+function initClearData() {
+  const btn = document.getElementById("clearLocalData");
+  if (!btn) return;
+  btn.addEventListener("click", () => {
+    if (!confirm("Reset semua data lokal? Ini tidak bisa dibatalkan.")) return;
+    localStorage.removeItem("opsguard_records");
+    localStorage.removeItem("opsguard_audit");
+    seedDemoData();
+    refreshDashboard();
+    showToast("🔄 Data direset ke demo default.", "info");
+  });
+}
+
+// ──────────────────────────────────────────────
+// FILTER & SEARCH
+// ──────────────────────────────────────────────
+function initFilters() {
+  const filterEl = document.getElementById("statusFilter");
+  const searchEl = document.getElementById("assetSearch");
+  if (filterEl) filterEl.addEventListener("change", () => renderRecordsTable(filterEl.value, searchEl?.value || ""));
+  if (searchEl) searchEl.addEventListener("input",  () => renderRecordsTable(filterEl?.value || "Semua", searchEl.value));
+}
+
+// ──────────────────────────────────────────────
+// HERO LANDING MINI PANEL ANIMATION
+// ──────────────────────────────────────────────
+function initHeroPanel() {
+  const assets    = ["TRK-PLT-204", "FRK-LFT-012", "GEN-SET-003", "CRN-OVH-007"];
+  const locations = ["Warehouse Bekasi 2", "Gudang Cakung A", "Server Room", "Workshop Pulogadung"];
+  const types     = ["Preventive", "Corrective", "Emergency", "Inspection"];
+  const alerts    = [
+    "✓ Aset terverifikasi · ✓ Format valid · ⚠ Ada issue serupa 6 hari lalu",
+    "✓ Aset OK · ✓ Format valid · ✅ Tidak ada duplikasi",
+    "⚠ Emergency repair — eskalasi ke supervisor disarankan",
+    "✓ Inspeksi rutin · ✓ Format valid · ✅ Data siap approval",
+  ];
+
+  let i = 0;
+  function rotate() {
+    const j = i % assets.length;
+    const set = (id, val) => { const el = document.getElementById(id); if (el) el.textContent = val; };
+    set("snapshotAsset",    assets[j]);
+    set("snapshotLocation", locations[j]);
+    set("snapshotType",     types[j]);
+    set("snapshotAlert",    alerts[j]);
+    i++;
+  }
+  setInterval(rotate, 3000);
+
+  // Mini KPI counter
+  const records = getRecords();
+  const set2 = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = v; };
+  set2("miniValidated",  records.filter(r => r.status === "Valid" || r.status === "Approved").length || 148);
+  set2("miniNeedReview", records.filter(r => r.status === "Menunggu Review" || r.status === "Warning").length || 12);
+}
+
+// ──────────────────────────────────────────────
+// TOAST NOTIFICATIONS
+// ──────────────────────────────────────────────
+function showToast(msg, type = "info") {
+  let container = document.getElementById("toastContainer");
+  if (!container) {
+    container = document.createElement("div");
+    container.id = "toastContainer";
+    container.style.cssText = "position:fixed;bottom:24px;right:24px;z-index:9999;display:flex;flex-direction:column;gap:8px;";
+    document.body.appendChild(container);
+  }
+
+  const colors = { success: "#059669", warning: "#d97706", info: "#0ea5e9", error: "#dc2626" };
+  const toast  = document.createElement("div");
+  toast.style.cssText = `background:${colors[type]||"#333"};color:#fff;padding:12px 18px;border-radius:10px;font-size:14px;max-width:320px;box-shadow:0 4px 16px rgba(0,0,0,.2);animation:slideIn .25s ease;`;
+  toast.textContent = msg;
+  container.appendChild(toast);
+
+  if (!document.getElementById("toastStyle")) {
+    const s = document.createElement("style");
+    s.id = "toastStyle";
+    s.textContent = `@keyframes slideIn{from{transform:translateX(110%);opacity:0}to{transform:translateX(0);opacity:1}}`;
+    document.head.appendChild(s);
+  }
+
+  setTimeout(() => toast.remove(), 3500);
+}
+
+// ──────────────────────────────────────────────
+// INJECT MISSING CSS CLASSES (jika style.css belum punya)
+// ──────────────────────────────────────────────
+function injectExtraStyles() {
+  const s = document.createElement("style");
+  s.textContent = `
+    /* Status Pills */
+    .status-pill { display:inline-block; padding:3px 10px; border-radius:20px; font-size:12px; font-weight:600; }
+    .status-valid    { background:#d1fae5; color:#065f46; }
+    .status-warning  { background:#fef3c7; color:#92400e; }
+    .status-review   { background:#dbeafe; color:#1e40af; }
+    .status-approved { background:#ede9fe; color:#4c1d95; }
+    .status-revised  { background:#f3f4f6; color:#374151; }
+    .status-live     { background:#d1fae5; color:#065f46; }
+
+    /* Validation Box */
+    .validation-box { padding:12px; background:#f8f9fa; border-radius:8px; margin:12px 0; font-size:13px; }
+    .validation-item { padding:3px 0; color:#6b7280; }
+    .validation-item.ok { color:#059669; }
+    .validation-item.err { color:#dc2626; }
+
+    /* AI Analysis Panel */
+    .ai-analysis-panel { margin-top:16px; border:1.5px solid #e5e7eb; border-radius:12px; padding:16px; background:#fafafa; }
+    .ai-panel-header { display:flex; justify-content:space-between; align-items:center; margin-bottom:10px; }
+    .ai-panel-title { font-weight:700; font-size:14px; }
+    .ai-badge { padding:4px 12px; border-radius:20px; font-size:12px; font-weight:700; }
+    .badge-low    { background:#d1fae5; color:#065f46; }
+    .badge-medium { background:#fef3c7; color:#92400e; }
+    .badge-high   { background:#fee2e2; color:#991b1b; }
+    .ai-summary { font-size:13px; color:#374151; margin-bottom:8px; }
+    .ai-section { margin-top:8px; font-size:13px; }
+    .ai-section ul { margin:4px 0 0 16px; }
+    .ai-section li { margin-bottom:2px; color:#4b5563; }
+
+    /* Review Queue */
+    .review-item { display:flex; justify-content:space-between; align-items:flex-start; padding:12px 0; border-bottom:1px solid #f3f4f6; gap:12px; }
+    .review-item:last-child { border-bottom:none; }
+    .review-asset { font-weight:700; font-size:14px; }
+    .review-meta  { font-size:12px; color:#6b7280; margin:2px 0; }
+    .review-note  { font-size:13px; color:#374151; }
+    .review-item-right { display:flex; flex-direction:column; align-items:flex-end; gap:6px; flex-shrink:0; }
+    .review-actions { display:flex; gap:6px; }
+    .review-empty { text-align:center; padding:24px; color:#6b7280; }
+    .review-empty span { font-size:28px; display:block; margin-bottom:8px; }
+
+    /* Buttons */
+    .btn-small { padding:4px 10px; border-radius:6px; font-size:12px; font-weight:600; border:none; cursor:pointer; }
+    .btn-approve { background:#d1fae5; color:#065f46; }
+    .btn-reject  { background:#fee2e2; color:#991b1b; }
+
+    /* Table */
+    .empty-state { text-align:center; padding:24px; color:#9ca3af; font-style:italic; }
+    .note-cell   { max-width:200px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+
+    /* Form Feedback */
+    .feedback-success { background:#d1fae5; color:#065f46; padding:12px 16px; border-radius:8px; margin-top:8px; font-size:14px; }
+
+    /* Form shortcuts */
+    .form-shortcuts { display:flex; gap:10px; margin-top:16px; flex-wrap:wrap; }
+    .form-page-note { font-size:12px; color:#9ca3af; margin-top:12px; text-align:center; }
+  `;
+  document.head.appendChild(s);
+}
+
+// ──────────────────────────────────────────────
+// INIT
+// ──────────────────────────────────────────────
+document.addEventListener("DOMContentLoaded", () => {
+  injectExtraStyles();
+  seedDemoData();
+  initNavbar();
+
+  // Dashboard page
+  if (document.getElementById("reviewList")) {
+    refreshDashboard();
+    initSimulationButtons();
+    initFilters();
+    initExport();
+    initClearData();
+
+    // Auto-refresh setiap 30 detik
+    setInterval(refreshDashboard, 30000);
+  }
+
+  // Form page
+  if (document.getElementById("maintenanceForm")) {
+    initFormValidation();
+    initAiAnalysis();
+    initFormSubmit();
+
+    // Set today's date as default
+    const dateEl = document.getElementById("maintenanceDate");
+    if (dateEl && !dateEl.value) {
+      dateEl.value = new Date().toISOString().slice(0, 10);
+    }
+  }
+
+  // Landing page
+  if (document.getElementById("snapshotAsset")) {
+    initHeroPanel();
+  }
 });
