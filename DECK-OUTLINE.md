@@ -6,7 +6,7 @@ AI-assisted Maintenance Governance Platform
 
 ### Isi:
 - Nama project: OPS Guard
-- Nama tim: CGM
+- Nama tim: Crypto Gem
 - Tagline: *Turning maintenance logs into reliable governance data*
 
 ---
